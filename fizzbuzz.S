@@ -1,10 +1,13 @@
 .intel_syntax prefix
 
+#define BUSY_LOOP 0
+
 // Header files.
 #include <asm/errno.h>
 #include <asm/mman.h>
 #include <asm/unistd.h>
 #define F_SETPIPE_SZ 1031 // not in asm headers, define it manually
+#define SPLICE_F_NONBLOCK	2
 
 // The Linux system call API (limited to 4 arguments, the most this
 // program uses). 64-bit registers are unsuffixed; 32-bit have an "e"
@@ -408,13 +411,21 @@ mov [%rip + iovec_base + 8], %rdx
 mov ARG1e, 1
 lea ARG2, [%rip + iovec_base]
 mov ARG3e, 1
+#if BUSY_LOOP
+mov ARG4e, SPLICE_F_NONBLOCK
+#else
 xor ARG4e, ARG4e
+#endif
 
 // As with most output commands, vmsplice can do a short write
 // sometimes, so it needs to be called in a loop in order to ensure
 // that all the output is actually sent.
 1: mov SYSCALL_NUMBER, __NR_vmsplice
 syscall
+#if BUSY_LOOP
+cmp SYSCALL_RETURN, -0x00B // EINVAL
+je 1b
+#endif
 call exit_on_error
 add [ARG2], SYSCALL_RETURN
 sub [ARG2 + 8], SYSCALL_RETURN
