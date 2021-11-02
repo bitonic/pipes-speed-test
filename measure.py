@@ -18,6 +18,7 @@ class CompileOptions:
   write_with_vmsplice: bool = True
   read_with_splice: bool = True
   gift: bool = True
+  poll: bool = True
 
 def build_cflags(compile_options):
   cflags = ""
@@ -60,16 +61,22 @@ def run(options, compile_options):
 
 def run_all(options):
   result = ""
-  for shift in [15, 17, 20, 21]:
+  for shift in [15, 17, 20]:
     compile_options = CompileOptions(
       buf_size=(1 << shift),
       write_with_vmsplice=False,
       read_with_splice=False,
       huge_page=False,
       busy_loop=False,
-      gift=False
+      gift=False,
+      poll=False,
     )
     result += run(options, compile_options)
+    compile_options.busy_loop = True
+    compile_options.poll = True
+    result += run(options, compile_options)
+    compile_options.busy_loop = False
+    compile_options.poll = False
     compile_options.write_with_vmsplice = True
     result += run(options, compile_options)
     compile_options.read_with_splice = True
@@ -78,12 +85,14 @@ def run_all(options):
     result += run(options, compile_options)
     compile_options.busy_loop = True
     result += run(options, compile_options)
+    compile_options.poll = True
+    result += run(options, compile_options)
     compile_options.gift = True
     result += run(options, compile_options)
   return result
 
 # 20 iterations, 10GB each
-options = Options(iterations=5, read_size=(10 << 30))
+options = Options(iterations=5, read_size=(10 << 20))
 result_dtype = [
   ("bytes_per_second", np.double),
   ("read_size", np.uint),
@@ -93,8 +102,9 @@ result_dtype = [
   ("huge_page", np.bool_),
   ("busy_loop", np.bool_),
   ("gift", np.bool_),
+  ("poll", np.bool_),
 ]
-result_csv = "bytes_per_second,read_size,buf_size,write_with_vmsplice,read_with_splice,huge_page,busy_loop,gift\n"
+result_csv = "bytes_per_second,read_size,buf_size,write_with_vmsplice,read_with_splice,huge_page,busy_loop,poll,gift\n"
 for _ in range(options.iterations):
   result_csv += run_all(options)
 with open("raw-data.csv", "w") as f:

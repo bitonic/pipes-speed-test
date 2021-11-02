@@ -7,6 +7,10 @@
 #define BUSY_LOOP 1
 #endif
 
+#ifndef POLL
+#define POLL 1
+#endif
+
 // Whether to allocate the buffers in a huge page
 #ifndef HUGE_PAGE
 #define HUGE_PAGE 1
@@ -18,12 +22,12 @@
 #endif
 
 #ifndef WRITE_WITH_VMSPLICE
-#define WRITE_WITH_VMSPLICE 1
+#define WRITE_WITH_VMSPLICE 0
 #endif
 
 // Whether the read end should just shovel data into /dev/null with `splice`
 #ifndef READ_WITH_SPLICE
-#define READ_WITH_SPLICE 1
+#define READ_WITH_SPLICE 0
 #endif
 
 // Linux huge pages are 2MiB or 1GiB, we use the 2MiB ones.

@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/kernel-page-flags.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,10 +20,20 @@ static void start_stream_write() {
     exit(EXIT_FAILURE);
   }
 #endif
+#if POLL
+  struct pollfd pollfd;
+  pollfd.fd = STDOUT_FILENO;
+  pollfd.events = POLLOUT;
+#endif
   while (1) {
     char* cursor = buf;
     ssize_t remaining = BUF_SIZE;
     while (__builtin_expect(remaining > 0, !HUGE_PAGE)) {
+#if POLL && BUSY_LOOP
+      while (poll(&pollfd, 1, 0) == 0) {}
+#elif POLL
+      poll(&pollfd, 1, -1);
+#endif
       ssize_t ret = write(STDOUT_FILENO, cursor, remaining);
       if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
         continue;
@@ -40,10 +51,20 @@ static void start_stream_write() {
 NOINLINE UNUSED
 static void start_stream_vmsplice() {
   struct iovec bufvec;
+#if POLL
+  struct pollfd pollfd;
+  pollfd.fd = STDOUT_FILENO;
+  pollfd.events = POLLOUT | POLLWRBAND;
+#endif
   while (1) {
     bufvec.iov_base = buf;
     bufvec.iov_len = BUF_SIZE;
     while (__builtin_expect(bufvec.iov_len > 0, !HUGE_PAGE)) {
+#if POLL && BUSY_LOOP
+      while (poll(&pollfd, 1, 0) == 0) {}
+#elif POLL
+      poll(&pollfd, 1, -1);
+#endif
       ssize_t ret = vmsplice(
         STDOUT_FILENO, &bufvec, 1,
         (BUSY_LOOP ? SPLICE_F_NONBLOCK : 0) | (GIFT ? SPLICE_F_GIFT : 0)
