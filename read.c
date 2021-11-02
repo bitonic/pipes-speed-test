@@ -1,17 +1,15 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #include <string.h>
-#include <time.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
-#include <fcntl.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "common.h"
-
-#define PASSTHROUGH 1
 
 static struct timespec tspec;
 
@@ -31,11 +29,15 @@ int main(int argc, const char* argv[]) {
   if (argc == 1) {
     // all good
   } else if (argc == 2) {
-    if (sscanf(argv[1], "%zuG", &bytes_to_read)) {
+    char control;
+    int matched = sscanf(argv[1], "%zu%c", &bytes_to_read, &control);
+    if (matched == 1) {
+      // no-op -- it's bytes
+    } else if (matched == 2 && control == 'G') {
       bytes_to_read = bytes_to_read << 30;
-    } else if (sscanf(argv[1], "%zuM", &bytes_to_read)) {
+    } else if (matched == 2 && control == 'M') {
       bytes_to_read = bytes_to_read << 20;
-    } else if (sscanf(argv[1], "%zuK", &bytes_to_read)) {
+    } else if (matched == 2 && control == 'K') {
       bytes_to_read = bytes_to_read << 10;
     } else {
       fprintf(stderr, "bad size specification %s\n", argv[1]);
@@ -50,12 +52,12 @@ int main(int argc, const char* argv[]) {
 
   double t0 = get_millis();
   size_t read_count = 0;
-#if PASSTHROUGH
+#if READ_WITH_SPLICE
   int devnull = open("/dev/null", O_WRONLY);
   while (read_count < bytes_to_read) {
     ssize_t ret = splice(
       STDIN_FILENO, NULL, devnull, NULL, BUF_SIZE,
-      (BUSY_LOOP ? SPLICE_F_NONBLOCK : 0) | (GIFT ? SPLICE_F_GIFT : 0)
+      (BUSY_LOOP ? SPLICE_F_NONBLOCK : 0) | (GIFT ? SPLICE_F_MOVE : 0)
     );
     if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
       continue;
@@ -78,7 +80,18 @@ int main(int argc, const char* argv[]) {
   }
 #endif
   double t1 = get_millis();
-  printf("%f\n", 1000.0 * ((double) read_count) / (t1 - t0));
+  double bytes_per_second = 1000.0 * ((double) read_count) / (t1 - t0);
+  printf(
+    "%f,%zu,%d,%d,%d,%d,%d,%d\n",
+    bytes_per_second,
+    bytes_to_read,
+    BUF_SIZE,
+    WRITE_WITH_VMSPLICE,
+    READ_WITH_SPLICE,
+    HUGE_PAGE,
+    BUSY_LOOP,
+    GIFT
+  );
 
   return 0;
 }

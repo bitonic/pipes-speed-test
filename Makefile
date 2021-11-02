@@ -1,21 +1,22 @@
 CC = clang
 LD = ld
-CFLAGS = -mavx2 -Wall -Wextra -std=c11 -O3 -g
+CFLAGS = -mavx2 -Wall -Wextra -std=c11 -O3 -g $(OPTIONS_CFLAGS)
 
 .PHONY: all
-all: vmsplice time-pipe fizzbuzz
+all: write read fizzbuzz
 
 %.o: %.c common.h
 	$(CC) -c $(CFLAGS) $<
 
-vmsplice: vmsplice.o page-info.o
+write: write.o page-info.o
 	$(CC) -o $@ $^
 
-time-pipe: time-pipe.o
+read: read.o
 	$(CC) -o $@ $^
 
 fizzbuzz.o: fizzbuzz.S
-	gcc -c $(CFLAGS) $<
+	# clang doesn't work to compile the assembly
+	gcc -c -mavx2 $<
 
 fizzbuzz: fizzbuzz.o
 	$(LD) -o $@ $?
@@ -23,5 +24,4 @@ fizzbuzz: fizzbuzz.o
 .PHONY: clean
 clean:
 	rm -f *.o
-	rm -f vmsplice
-	rm -f fizzbuzz
+	rm -f write read fizzbuzz

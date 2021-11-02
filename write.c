@@ -11,31 +11,52 @@
 
 #include "common.h"
 
-NOINLINE
-static void start_stream() {
-  struct iovec bufvec;
-  bufvec.iov_len = BUF_SIZE;
+NOINLINE UNUSED
+static void start_stream_write() {
+#if BUSY_LOOP
+  if (fcntl(STDOUT_FILENO, F_SETFL, O_NONBLOCK) < 0) {
+    fprintf(stderr, "could not mark stdout pipe as non blocking: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+#endif
   while (1) {
-    for (int i = 0; i < FILL_SIZE; i++) {
-      buf[i] = (char) (i % 10) + '0';
+    char* cursor = buf;
+    ssize_t remaining = BUF_SIZE;
+    while (__builtin_expect(remaining > 0, !HUGE_PAGE)) {
+      ssize_t ret = write(STDOUT_FILENO, cursor, remaining);
+      if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
+        continue;
+      }
+      if (__builtin_expect(ret < 0, 0)) {
+        fprintf(stderr, "read failed: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      cursor += ret;
+      remaining -= ret;
     }
+  }
+}
+
+NOINLINE UNUSED
+static void start_stream_vmsplice() {
+  struct iovec bufvec;
+  while (1) {
     bufvec.iov_base = buf;
-    // unlikely to enter this loop twice with huge pages
-    while (__builtin_expect(bufvec.iov_base < (void*) (buf + BUF_SIZE), !USE_HUGE_PAGE)) {
+    bufvec.iov_len = BUF_SIZE;
+    while (__builtin_expect(bufvec.iov_len > 0, !HUGE_PAGE)) {
       ssize_t ret = vmsplice(
         STDOUT_FILENO, &bufvec, 1,
         (BUSY_LOOP ? SPLICE_F_NONBLOCK : 0) | (GIFT ? SPLICE_F_GIFT : 0)
       );
-      // likely when busy looping
       if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
         continue;
       }
-      // always unlikely
       if (__builtin_expect(ret < 0, 0)) {
         fprintf(stderr, "vmsplice failed: %s", strerror(errno));
         exit(EXIT_FAILURE);
       }
       bufvec.iov_base += ret;
+      bufvec.iov_len -= ret;
     }
   }
 }
@@ -76,7 +97,11 @@ int main(void) {
   }
 
   fprintf(stderr, "starting stream\n");
-  start_stream();
+#if WRITE_WITH_VMSPLICE
+  start_stream_vmsplice();
+#else
+  start_stream_write();
+#endif
 
   return 0;
 }

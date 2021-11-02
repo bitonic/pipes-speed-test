@@ -1,4 +1,6 @@
 fizzbuzz
-vmsplice
-time-pipe
+read
+write
 *.o
+*.csv
+.vscode
