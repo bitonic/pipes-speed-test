@@ -13,7 +13,7 @@
 #include "common.h"
 
 NOINLINE UNUSED
-static void start_stream_write() {
+static void with_write() {
 #if BUSY_LOOP
   if (fcntl(STDOUT_FILENO, F_SETFL, O_NONBLOCK) < 0) {
     fprintf(stderr, "could not mark stdout pipe as non blocking: %s", strerror(errno));
@@ -23,7 +23,7 @@ static void start_stream_write() {
 #if POLL
   struct pollfd pollfd;
   pollfd.fd = STDOUT_FILENO;
-  pollfd.events = POLLOUT;
+  pollfd.events = POLLOUT | POLLWRBAND;
 #endif
   while (1) {
     char* cursor = buf;
@@ -35,11 +35,16 @@ static void start_stream_write() {
       poll(&pollfd, 1, -1);
 #endif
       ssize_t ret = write(STDOUT_FILENO, cursor, remaining);
-      if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
+      // we never seem to get stuck here when writing manually
+      if (__builtin_expect(ret < 0 && errno == EAGAIN, 0)) {
         continue;
       }
       if (__builtin_expect(ret < 0, 0)) {
         fprintf(stderr, "read failed: %s", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      if (ret != BUF_SIZE) {
+        fprintf(stderr, "only wrote %zu bytes rather than %d!\n", ret, BUF_SIZE);
         exit(EXIT_FAILURE);
       }
       cursor += ret;
@@ -49,7 +54,7 @@ static void start_stream_write() {
 }
 
 NOINLINE UNUSED
-static void start_stream_vmsplice() {
+static void with_vmsplice() {
   struct iovec bufvec;
 #if POLL
   struct pollfd pollfd;
@@ -69,7 +74,7 @@ static void start_stream_vmsplice() {
         STDOUT_FILENO, &bufvec, 1,
         (BUSY_LOOP ? SPLICE_F_NONBLOCK : 0) | (GIFT ? SPLICE_F_GIFT : 0)
       );
-      if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
+      if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP & !POLL)) {
         continue;
       }
       if (__builtin_expect(ret < 0, 0)) {
@@ -109,7 +114,12 @@ int main(void) {
   fprintf(stderr, "resizing pipe to 0x%x\n", BUF_SIZE);
   int fcntl_res = fcntl(STDOUT_FILENO, F_SETPIPE_SZ, BUF_SIZE);
   if (fcntl_res < 0) {
-    fprintf(stderr, "setting the pipe size failed, are you piping the output somewhere? error: %s\n", strerror(errno));
+    if (errno == EPERM) {
+      fprintf(stderr, "setting the pipe size failed with EPERM, %d is probably above the pipe size limit\n", BUF_SIZE);
+
+    } else {
+      fprintf(stderr, "setting the pipe size failed, are you piping the output somewhere? error: %s\n", strerror(errno));
+    }
     exit(EXIT_FAILURE);
   }
   if ((size_t) fcntl_res != BUF_SIZE) {
@@ -117,11 +127,13 @@ int main(void) {
     exit(EXIT_FAILURE);
   }
 
+  getchar();
+
   fprintf(stderr, "starting stream\n");
 #if WRITE_WITH_VMSPLICE
-  start_stream_vmsplice();
+  with_vmsplice();
 #else
-  start_stream_write();
+  with_write();
 #endif
 
   return 0;

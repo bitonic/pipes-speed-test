@@ -61,7 +61,7 @@ def run(options, compile_options):
 
 def run_all(options):
   result = ""
-  for shift in [15, 17, 20]:
+  for shift in [15, 17, 20, 23]:
     compile_options = CompileOptions(
       buf_size=(1 << shift),
       write_with_vmsplice=False,
@@ -71,12 +71,6 @@ def run_all(options):
       gift=False,
       poll=False,
     )
-    result += run(options, compile_options)
-    compile_options.busy_loop = True
-    compile_options.poll = True
-    result += run(options, compile_options)
-    compile_options.busy_loop = False
-    compile_options.poll = False
     compile_options.write_with_vmsplice = True
     result += run(options, compile_options)
     compile_options.read_with_splice = True
@@ -85,14 +79,10 @@ def run_all(options):
     result += run(options, compile_options)
     compile_options.busy_loop = True
     result += run(options, compile_options)
-    compile_options.poll = True
-    result += run(options, compile_options)
-    compile_options.gift = True
-    result += run(options, compile_options)
   return result
 
-# 20 iterations, 10GB each
-options = Options(iterations=5, read_size=(10 << 20))
+# 10 iterations, 10GB each
+options = Options(iterations=10, read_size=(10 << 30))
 result_dtype = [
   ("bytes_per_second", np.double),
   ("read_size", np.uint),
@@ -101,8 +91,8 @@ result_dtype = [
   ("read_with_splice", np.bool_),
   ("huge_page", np.bool_),
   ("busy_loop", np.bool_),
-  ("gift", np.bool_),
   ("poll", np.bool_),
+  ("gift", np.bool_),
 ]
 result_csv = "bytes_per_second,read_size,buf_size,write_with_vmsplice,read_with_splice,huge_page,busy_loop,poll,gift\n"
 for _ in range(options.iterations):
@@ -110,4 +100,4 @@ for _ in range(options.iterations):
 with open("raw-data.csv", "w") as f:
   f.write(result_csv)
 result = pandas.read_csv("raw-data.csv", dtype=result_dtype)
-result.groupby(["read_size", "buf_size", "write_with_vmsplice", "read_with_splice", "huge_page", "busy_loop", "gift"]).mean().to_csv("data.csv")
+result.groupby(["read_size", "buf_size", "write_with_vmsplice", "read_with_splice", "huge_page", "busy_loop", "poll", "gift"]).mean().to_csv("data.csv")

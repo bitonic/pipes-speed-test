@@ -2,13 +2,13 @@
 #define NOINLINE __attribute__((noinline))
 #define UNUSED __attribute__((unused))
 
-// Whether to busy loop on `vmsplice` or to block
+// Whether to busy loop on syscalls with non blocking, or whether to block.
 #ifndef BUSY_LOOP
 #define BUSY_LOOP 1
 #endif
 
 #ifndef POLL
-#define POLL 1
+#define POLL 0
 #endif
 
 // Whether to allocate the buffers in a huge page
@@ -22,12 +22,12 @@
 #endif
 
 #ifndef WRITE_WITH_VMSPLICE
-#define WRITE_WITH_VMSPLICE 0
+#define WRITE_WITH_VMSPLICE 1
 #endif
 
 // Whether the read end should just shovel data into /dev/null with `splice`
 #ifndef READ_WITH_SPLICE
-#define READ_WITH_SPLICE 0
+#define READ_WITH_SPLICE 1
 #endif
 
 // Linux huge pages are 2MiB or 1GiB, we use the 2MiB ones.
@@ -56,8 +56,10 @@
 #include "page-info.h"
 #endif
 
-#if HUGE_PAGE
+#if HUGE_PAGE && HUGE_PAGE_SIZE > BUF_SIZE
   static char buf[HUGE_PAGE_SIZE] __attribute__((aligned(HUGE_PAGE_ALIGNMENT)));
+#elif HUGE_PAGE
+  static char buf[BUF_SIZE] __attribute__((aligned(HUGE_PAGE_ALIGNMENT)));
 #else
   static char buf[BUF_SIZE];
 #endif

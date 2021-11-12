@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include "common.h"
 
@@ -24,6 +25,43 @@ static double get_millis() {
 
 NOINLINE UNUSED
 static size_t with_read(size_t bytes_to_read) {
+#if BUSY_LOOP
+  if (fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) < 0) {
+    fprintf(stderr, "could not mark stdout pipe as non blocking: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+#endif
+#if POLL
+  struct pollfd pollfd;
+  pollfd.fd = STDOUT_FILENO;
+  pollfd.events = POLLIN | POLLPRI;
+#endif
+  size_t read_count = 0;
+  while (read_count < bytes_to_read) {
+#if POLL && BUSY_LOOP
+    while (poll(&pollfd, 1, 0) == 0) {}
+#elif POLL
+    poll(&pollfd, 1, -1);
+#endif
+    ssize_t ret = read(STDIN_FILENO, buf, BUF_SIZE);
+    if (__builtin_expect(ret < 0 && errno == EAGAIN, 0)) {
+      continue;
+    }
+    if (__builtin_expect(ret < 0, 0)) {
+      fprintf(stderr, "read failed: %s", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+    if (ret != BUF_SIZE) {
+      fprintf(stderr, "only read %zu bytes rather than %d!\n", ret, BUF_SIZE);
+      exit(EXIT_FAILURE);
+    }
+    read_count += ret;
+  }
+  return read_count;
+}
+
+NOINLINE UNUSED
+static size_t with_splice(size_t bytes_to_read) {
 #if POLL
   struct pollfd pollfd;
   pollfd.fd = STDOUT_FILENO;
@@ -41,7 +79,7 @@ static size_t with_read(size_t bytes_to_read) {
       STDIN_FILENO, NULL, devnull, NULL, BUF_SIZE,
       (BUSY_LOOP ? SPLICE_F_NONBLOCK : 0) | (GIFT ? SPLICE_F_MOVE : 0)
     );
-    if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP)) {
+    if (__builtin_expect(ret < 0 && errno == EAGAIN, BUSY_LOOP & !POLL)) {
       continue;
     }
     if (__builtin_expect(ret < 0, 0)) {
@@ -51,30 +89,6 @@ static size_t with_read(size_t bytes_to_read) {
     read_count += ret;
   }
   close(devnull);
-  return read_count;
-}
-
-NOINLINE UNUSED
-static size_t with_vmsplice(size_t bytes_to_read) {
-#if POLL
-  struct pollfd pollfd;
-  pollfd.fd = STDOUT_FILENO;
-  pollfd.events = POLLIN | POLLPRI;
-#endif
-  size_t read_count = 0;
-  while (read_count < bytes_to_read) {
-#if POLL && BUSY_LOOP
-    while (poll(&pollfd, 1, 0) == 0) {}
-#elif POLL
-    poll(&pollfd, 1, -1);
-#endif
-    ssize_t ret = read(STDIN_FILENO, buf, BUF_SIZE);
-    if (__builtin_expect(ret < 0, 0)) {
-      fprintf(stderr, "read failed: %s", strerror(errno));
-      exit(EXIT_FAILURE);
-    }
-    read_count += ret;
-  }
   return read_count;
 }
 
@@ -109,15 +123,15 @@ int main(int argc, const char* argv[]) {
 
   double t0 = get_millis();
 #if READ_WITH_SPLICE
-  size_t read_count = with_read(bytes_to_read);
+  size_t read_count = with_splice(bytes_to_read);
 #else
-  size_t read_count = with_vmsplice(bytes_to_read);
+  size_t read_count = with_read(bytes_to_read);
 #endif
   double t1 = get_millis();
-  double bytes_per_second = 1000.0 * ((double) read_count) / (t1 - t0);
+  double gigabytes_per_second = (((double) read_count) / 1000000) / (t1 - t0);
   printf(
     "%f,%zu,%d,%d,%d,%d,%d,%d,%d\n",
-    bytes_per_second,
+    gigabytes_per_second,
     bytes_to_read,
     BUF_SIZE,
     WRITE_WITH_VMSPLICE,
