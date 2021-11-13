@@ -6,5 +6,6 @@ stdenvNoCC.mkDerivation {
     pv
     python38Packages.numpy
     python38Packages.pandas
+    python38Packages.tqdm
   ];
 }

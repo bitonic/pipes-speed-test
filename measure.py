@@ -1,17 +1,14 @@
-from dataclasses import dataclass
+import dataclasses
 import subprocess
 import os
 import numpy as np
 import pandas
+from tqdm import tqdm
 
-@dataclass
-class Options:
-  iterations: int = 5
-  read_size: int = 1 << 30 # 1GiB
-
-@dataclass
-class CompileOptions:
+@dataclasses.dataclass
+class RunOptions:
   busy_loop: bool = True
+  bytes_to_pipe: int = 1 << 30 # 1GiB
   huge_page: bool = True
   # 128KiB by default (half of my L2 cache)
   buf_size: int = 1 << 17
@@ -20,72 +17,75 @@ class CompileOptions:
   gift: bool = True
   poll: bool = True
 
-def build_cflags(compile_options):
-  cflags = ""
-  for field in compile_options.__dataclass_fields__:
-    value = getattr(compile_options, field)
+def build_flags(run_options):
+  flags = []
+  for field in run_options.__dataclass_fields__:
+    value = getattr(run_options, field)
     if value == True:
-      cflags += f" -D{field.upper()}=1"
+      flags.append(f"--{field}")
     elif value == False:
-      cflags += f" -D{field.upper()}=0"
+      pass
     elif isinstance(value, int):
-      cflags += f" -D{field.upper()}={value}"
-  return cflags
+      flags.append(f"--{field}={value}")
+  return flags
 
-def run(options, compile_options):
-  print("building binaries ...", end="", flush=True)
-  subprocess.run(("make", "clean"), check=True, stdout=subprocess.DEVNULL)
-  env = os.environ.copy()
-  env["OPTIONS_CFLAGS"] = build_cflags(compile_options)
-  subprocess.run(
-    ("make", "write", "read"),
-    check=True,
-    stdout=subprocess.DEVNULL,
-    env=env,
-  )
+def run(run_options):
+  flags = build_flags(run_options)
   with subprocess.Popen(
-    ("taskset", "1", "./write"),
+    ["sudo", "taskset", "1", "./write"] + flags,
     stdout=subprocess.PIPE,
     stderr=subprocess.DEVNULL,
   ) as write:
-    print(" done.")
-    print("running test ...", end="", flush=True)
     result = subprocess.run(
-      ("taskset", "2", "./read", str(options.read_size)),
+      ["sudo", "taskset", "2", "./read"] + flags,
       check=True,
       capture_output=True,
       stdin=write.stdout,
     )
-    print(" done.")
     return result.stdout.decode('utf-8')
 
-def run_all(options):
-  result = ""
-  for shift in [15, 17, 20, 23]:
-    compile_options = CompileOptions(
-      buf_size=(1 << shift),
-      write_with_vmsplice=False,
-      read_with_splice=False,
-      huge_page=False,
-      busy_loop=False,
-      gift=False,
-      poll=False,
-    )
-    compile_options.write_with_vmsplice = True
-    result += run(options, compile_options)
-    compile_options.read_with_splice = True
-    result += run(options, compile_options)
-    compile_options.huge_page = True
-    result += run(options, compile_options)
-    compile_options.busy_loop = True
-    result += run(options, compile_options)
-  return result
+class TestCaseGenerator:
+  def __init__(self):
+    self.iterations = 10
+    self.run_options = []
+    for shift in [15, 17, 20, 23]:
+      options = RunOptions(
+        bytes_to_pipe=(10 << 30),
+        buf_size=(1 << shift),
+        write_with_vmsplice=False,
+        read_with_splice=False,
+        huge_page=False,
+        busy_loop=False,
+        gift=False,
+        poll=False,
+      )
+      self.run_options.append(dataclasses.replace(options))
+      options.write_with_vmsplice = True
+      self.run_options.append(dataclasses.replace(options))
+      options.read_with_splice = True
+      self.run_options.append(dataclasses.replace(options))
+      options.huge_page = True
+      self.run_options.append(dataclasses.replace(options))
+      options.busy_loop = True
+      self.run_options.append(dataclasses.replace(options))
 
-# 10 iterations, 10GB each
-options = Options(iterations=10, read_size=(10 << 30))
+  def __iter__(self):
+    self.iteration = 0
+    self.remaining_run_options = self.run_options[:]
+    return self
+
+  def __next__(self):
+    if not self.remaining_run_options:
+      self.iteration += 1
+      if self.iteration >= self.iterations:
+        raise StopIteration
+      self.remaining_run_options = self.run_options[:]
+    return self.remaining_run_options.pop()
+
+# 10 iterations
 result_dtype = [
-  ("bytes_per_second", np.double),
-  ("read_size", np.uint),
+  ("gigabytes_per_second", np.double),
+  ("read_bytes", np.uint),
   ("buf_size", np.uint),
   ("write_with_vmsplice", np.bool_),
   ("read_with_splice", np.bool_),
@@ -94,10 +94,11 @@ result_dtype = [
   ("poll", np.bool_),
   ("gift", np.bool_),
 ]
-result_csv = "bytes_per_second,read_size,buf_size,write_with_vmsplice,read_with_splice,huge_page,busy_loop,poll,gift\n"
-for _ in range(options.iterations):
-  result_csv += run_all(options)
+result_csv = "gigabytes_per_second,bytes_to_pipe,buf_size,write_with_vmsplice,read_with_splice,huge_page,busy_loop,poll,gift\n"
+test_cases = TestCaseGenerator()
+for run_options in tqdm(test_cases, total=(len(test_cases.run_options) * test_cases.iterations)):
+  result_csv += run(run_options)
 with open("raw-data.csv", "w") as f:
   f.write(result_csv)
 result = pandas.read_csv("raw-data.csv", dtype=result_dtype)
-result.groupby(["read_size", "buf_size", "write_with_vmsplice", "read_with_splice", "huge_page", "busy_loop", "poll", "gift"]).mean().to_csv("data.csv")
+result.groupby(["bytes_to_pipe", "buf_size", "write_with_vmsplice", "read_with_splice", "huge_page", "busy_loop", "poll", "gift"]).mean().to_csv("data.csv")

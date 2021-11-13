@@ -36,10 +36,6 @@ static size_t with_read(const Options& options, char* buf) {
       fprintf(stderr, "read failed: %s", strerror(errno));
       exit(EXIT_FAILURE);
     }
-    if ((size_t) ret != options.buf_size) {
-      fprintf(stderr, "only read %zd bytes rather than %zu!\n", ret, options.buf_size);
-      exit(EXIT_FAILURE);
-    }
     read_count += ret;
   }
   return read_count;
