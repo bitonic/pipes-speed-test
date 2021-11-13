@@ -1,6 +1,9 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
+#include <linux/kernel-page-flags.h>
 #include <poll.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,9 +11,6 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <linux/kernel-page-flags.h>
-#include <getopt.h>
 
 #define NOINLINE __attribute__((noinline))
 #define UNUSED __attribute__((unused))
@@ -25,9 +25,7 @@ struct Options {
   size_t buf_size = 1 << 17;
   bool write_with_vmsplice = false;
   bool read_with_splice = false;
-  // Linux huge pages are 2MiB or 1GiB, we use the 2MiB ones.
   size_t huge_page_size = 1 << 21;
-  size_t huge_page_alignment = 1 << 21;
   // Whether pages should be gifted (and then moved if with READ_WITH_SPLICE) to
   // vmsplice
   bool gift = false;
@@ -109,6 +107,7 @@ static void parse_options(int argc, char** argv, Options& options) {
   fprintf(stderr, "busy_loop\t\t%s\n", bool_str(options.busy_loop));
   fprintf(stderr, "poll\t\t\t%s\n", bool_str(options.poll));
   fprintf(stderr, "huge_page\t\t%s\n", bool_str(options.huge_page));
+  fprintf(stderr, "huge_page_size\t\t%zu\n", options.huge_page_size);
   fprintf(stderr, "buf_size\t\t%zu\n", options.buf_size);
   fprintf(stderr, "write_with_vmsplice\t%s\n", bool_str(options.write_with_vmsplice));
   fprintf(stderr, "read_with_splice\t%s\n", bool_str(options.read_with_splice));
@@ -121,11 +120,14 @@ static char* allocate_buf(const Options& options) {
   void* buf = NULL;
   if (options.huge_page) {
     size_t sz = options.huge_page_size > options.buf_size ? options.huge_page_size : options.buf_size;
-    buf = aligned_alloc(options.huge_page_alignment, sz);
-    if ((((size_t) buf) & (options.huge_page_alignment - 1)) != 0) {
-      fprintf(stderr, "buf location %p is not aligned\n", buf);
+    fprintf(stderr, "allocating %zu bytes with %zu alignment\n\n", sz, options.huge_page_size);
+    int ret = posix_memalign(&buf, options.huge_page_size, sz);
+    if (ret != 0) {
+      fprintf(stderr, "failed to allocate aligned memory: %s", strerror(ret));
       exit(EXIT_FAILURE);
     }
+    // should be unnecessary according to madvise(2), but let's err o
+    // the safe side.
     if (madvise(buf, options.buf_size, MADV_HUGEPAGE) < 0) {
       fprintf(stderr, "could not defrag memory: %s", strerror(errno));
       exit(EXIT_FAILURE);
