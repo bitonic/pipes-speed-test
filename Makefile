@@ -1,18 +1,25 @@
-CC = clang
 LD = ld
-CFLAGS = -mavx2 -Wall -Wextra -std=c11 -O3 -g $(OPTIONS_CFLAGS)
+
+CC = clang
+CFLAGS = -march=native -Wall -Wextra -std=c11 -O3 -g
+
+CPP = clang++
+CPPFLAGS = -march=native -Wall -Wextra -std=c++17 -O3 -g
 
 .PHONY: all
 all: write read fizzbuzz
 
-%.o: %.c common.h
+page-info.o: page-info.c page-info.h
 	$(CC) -c $(CFLAGS) $<
 
-write: write.o page-info.o
-	$(CC) -o $@ $^
+%.o: %.cpp common.h
+	$(CPP) -c $(CPPFLAGS) -o $@ $<
 
-read: read.o
-	$(CC) -o $@ $^
+write: write.o page-info.o
+	$(CPP) -o $@ $^
+
+read: read.o page-info.o
+	$(CPP) -o $@ $^
 
 fizzbuzz.o: fizzbuzz.S
 	# clang doesn't work to compile the assembly

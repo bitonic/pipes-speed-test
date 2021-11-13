@@ -1,80 +1,172 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+#include <stdbool.h>
+#include <linux/kernel-page-flags.h>
+#include <getopt.h>
 
 #define NOINLINE __attribute__((noinline))
 #define UNUSED __attribute__((unused))
 
-// Whether to busy loop on syscalls with non blocking, or whether to block.
-#ifndef BUSY_LOOP
-#define BUSY_LOOP 1
-#endif
+struct Options {
+  // Whether to busy loop on syscalls with non blocking, or whether to block.
+  bool busy_loop = false;
+  bool poll = false;
+  // Whether to allocate the buffers in a huge page
+  bool huge_page = false;
+  // How big should the buffer be
+  size_t buf_size = 1 << 17;
+  bool write_with_vmsplice = false;
+  bool read_with_splice = false;
+  // Linux huge pages are 2MiB or 1GiB, we use the 2MiB ones.
+  size_t huge_page_size = 1 << 21;
+  size_t huge_page_alignment = 1 << 21;
+  // Whether pages should be gifted (and then moved if with READ_WITH_SPLICE) to
+  // vmsplice
+  bool gift = false;
+  // Bytes to pipe
+  size_t bytes_to_pipe = 1 << 30;
+};
 
-#ifndef POLL
-#define POLL 0
-#endif
+static size_t read_size_str(const char* str) {
+  size_t sz;
+  char control;
+  int matched = sscanf(str, "%zu%c", &sz, &control);
+  if (matched == 1) {
+    // no-op -- it's bytes
+  } else if (matched == 2 && control == 'G') {
+    sz = sz << 30;
+  } else if (matched == 2 && control == 'M') {
+    sz = sz << 20;
+  } else if (matched == 2 && control == 'K') {
+    sz = sz << 10;
+  } else {
+    fprintf(stderr, "bad size specification %s\n", str);
+    exit(EXIT_FAILURE);
+  }
+  return sz;
+}
 
-// Whether to allocate the buffers in a huge page
-#ifndef HUGE_PAGE
-#define HUGE_PAGE 1
-#endif
+static void parse_options(int argc, char** argv, Options& options) {
+  struct option long_options[] = {
+    { "busy_loop",      no_argument,       0, 0 },
+    { "poll",           no_argument,       0, 0 },
+    { "huge_page",      no_argument,       0, 0 },
+    { "buf_size",       required_argument, 0, 0 },
+    { "write_vmsplice", no_argument,       0, 0 },
+    { "read_splice",    no_argument,       0, 0 },
+    { "gift",           no_argument,       0, 0 },
+    { "bytes_to_pipe",  required_argument, 0, 0 },
+    { 0,                0,                 0, 0 }
+  };
 
-// How big should the buffer be
-#ifndef BUF_SIZE
-#define BUF_SIZE (1 << 17) // 128KiB
-#endif
+  opterr = 0; // we handle errors ourselves
+  while (true) {
+    int option_index;
+    int c = getopt_long(argc, argv, "", long_options, &option_index);
+    if (c == -1) {
+      break;
+    } else if (c == '?') {
+      optind--; // we want to print the one we just skipped over as well
+      fprintf(stderr, "bad usage, non-option arguments starting from:\n  ");
+      while (optind < argc) {
+        fprintf(stderr, "%s ", argv[optind++]);
+      }
+      fprintf(stderr, "\n");
+      exit(EXIT_FAILURE);
+    } else if (c == 0) {
+      const char* option = long_options[option_index].name;
+      options.busy_loop = options.busy_loop || (strcmp("busy_loop", option) == 0);
+      options.poll = options.poll || (strcmp("poll", option) == 0);
+      options.huge_page = options.huge_page || (strcmp("huge_page", option) == 0);
+      options.write_with_vmsplice =
+        options.write_with_vmsplice || (strcmp("write_vmsplice", option) == 0);
+      options.read_with_splice = options.read_with_splice || (strcmp("read_splice", option) == 0);
+      options.gift = options.gift || (strcmp("gift", option) == 0);
+      if (strcmp("buf_size", option) == 0) {
+        options.buf_size = read_size_str(optarg);
+      }
+      if (strcmp("bytes_to_pipe", option) == 0) {
+        options.bytes_to_pipe = read_size_str(optarg);
+      }
+    } else {
+      fprintf(stderr, "getopt returned character code 0%o\n", c);
+      exit(EXIT_FAILURE);
+    }
+  }
 
-#ifndef WRITE_WITH_VMSPLICE
-#define WRITE_WITH_VMSPLICE 1
-#endif
+  const auto bool_str = [](const bool b) {
+    if (b) { return "true"; }
+    else { return "false"; }
+  };
+  fprintf(stderr, "busy_loop\t\t%s\n", bool_str(options.busy_loop));
+  fprintf(stderr, "poll\t\t\t%s\n", bool_str(options.poll));
+  fprintf(stderr, "huge_page\t\t%s\n", bool_str(options.huge_page));
+  fprintf(stderr, "buf_size\t\t%zu\n", options.buf_size);
+  fprintf(stderr, "write_with_vmsplice\t%s\n", bool_str(options.write_with_vmsplice));
+  fprintf(stderr, "read_with_splice\t%s\n", bool_str(options.read_with_splice));
+  fprintf(stderr, "gift\t\t\t%s\n", bool_str(options.gift));
+  fprintf(stderr, "bytes_to_pipe\t\t%zu\n", options.bytes_to_pipe);
+  fprintf(stderr, "\n");
+}
 
-// Whether the read end should just shovel data into /dev/null with `splice`
-#ifndef READ_WITH_SPLICE
-#define READ_WITH_SPLICE 1
-#endif
-
-// Linux huge pages are 2MiB or 1GiB, we use the 2MiB ones.
-#ifndef HUGE_PAGE_SIZE
-#define HUGE_PAGE_SIZE (1 << 21) // 2MiB huge page
-#endif
-
-// Whether pages should be gifted (and then moved if with READ_WITH_SPLICE) to
-// vmsplice
-#ifndef GIFT
-#define GIFT 1
-#endif
-
-#ifndef HUGE_PAGE_ALIGNMENT
-#define HUGE_PAGE_ALIGNMENT (1 << 21)
-#endif
+static char* allocate_buf(const Options& options) {
+  void* buf = NULL;
+  if (options.huge_page) {
+    size_t sz = options.huge_page_size > options.buf_size ? options.huge_page_size : options.buf_size;
+    buf = aligned_alloc(options.huge_page_alignment, sz);
+    if ((((size_t) buf) & (options.huge_page_alignment - 1)) != 0) {
+      fprintf(stderr, "buf location %p is not aligned\n", buf);
+      exit(EXIT_FAILURE);
+    }
+    if (madvise(buf, options.buf_size, MADV_HUGEPAGE) < 0) {
+      fprintf(stderr, "could not defrag memory: %s", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+  } else {
+    buf = malloc(options.buf_size);
+  }
+  if (!buf) {
+    fprintf(stderr, "could not allocate buffer\n");
+    exit(EXIT_FAILURE);
+  }
+  // fill the buffer with 0s so that we know it's printable stuff
+  memset((void *) buf, options.buf_size, '0');
+  return (char *) buf;
+}
 
 // Whether to use page-info to print out info about huge pages
 #ifndef PAGE_INFO
-#define PAGE_INFO 0
+#define PAGE_INFO 1
 #endif
-
-// End of config
 
 #if PAGE_INFO
 #include "page-info.h"
 #endif
 
-#if HUGE_PAGE && HUGE_PAGE_SIZE > BUF_SIZE
-  static char buf[HUGE_PAGE_SIZE] __attribute__((aligned(HUGE_PAGE_ALIGNMENT)));
-#elif HUGE_PAGE
-  static char buf[BUF_SIZE] __attribute__((aligned(HUGE_PAGE_ALIGNMENT)));
-#else
-  static char buf[BUF_SIZE];
-#endif
-
-static void defrag_buf() {
-#if HUGE_PAGE
-  if ((((size_t) buf) & ((1 << 21) - 1)) != 0) {
-    fprintf(stderr, "buf location %p is not 2MiB aligned\n", buf);
-    exit(EXIT_FAILURE);
+UNUSED
+static void buf_page_info(const Options& options, char* buf) {
+#if PAGE_INFO
+  page_info_array pinfo = get_info_for_range(buf, buf + options.buf_size);
+  flag_count thp_count = get_flag_count(pinfo, KPF_THP);
+  if (thp_count.pages_available) {
+    fprintf(
+      stderr,
+      "source pages allocated with transparent hugepages: %4.1f%% (%lu total pages, %4.1f%% flagged)\n",
+      100.0 * thp_count.pages_set / thp_count.pages_total,
+      thp_count.pages_total,
+      100.0 * thp_count.pages_available / thp_count.pages_total
+    );
+  } else {
+    fprintf(stderr, "couldn't determine hugepage info (you are probably not running as root)\n");
   }
-
-  fprintf(stderr, "defragging buffer area\n");
-  if (madvise(buf, sizeof(buf), MADV_HUGEPAGE) < 0) {
-    fprintf(stderr, "could not defrag memory: %s", strerror(errno));
-    exit(EXIT_FAILURE);
-  }
+  fprintf(stderr, "\n");
 #endif
 }
