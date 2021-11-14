@@ -60,8 +60,14 @@ class TestCaseGenerator:
         poll=False,
       )
       self.run_options.append(dataclasses.replace(options))
+      options.huge_page = True
+      self.run_options.append(dataclasses.replace(options))
+      options.huge_page = False
       options.write_with_vmsplice = True
       self.run_options.append(dataclasses.replace(options))
+      options.huge_page = True
+      self.run_options.append(dataclasses.replace(options))
+      options.huge_page = False
       options.read_with_splice = True
       self.run_options.append(dataclasses.replace(options))
       options.huge_page = True
@@ -102,3 +108,4 @@ with open("raw-data.csv", "w") as f:
   f.write(result_csv)
 result = pandas.read_csv("raw-data.csv", dtype=result_dtype)
 result.groupby(["bytes_to_pipe", "buf_size", "write_with_vmsplice", "read_with_splice", "huge_page", "busy_loop", "poll", "gift"]).mean().to_csv("data.csv")
+
