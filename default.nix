@@ -4,6 +4,7 @@ stdenvNoCC.mkDerivation {
   buildInputs = [
     clang_12
     gcc11
+    sqlite
     pv
     python38Packages.numpy
     python38Packages.pandas
