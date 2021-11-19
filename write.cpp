@@ -4,8 +4,7 @@ NOINLINE UNUSED
 static void with_write(const Options& options, char* buf) {
   if (options.busy_loop) {
     if (fcntl(STDOUT_FILENO, F_SETFL, O_NONBLOCK) < 0) {
-      fprintf(stderr, "could not mark stdout pipe as non blocking: %s", strerror(errno));
-      exit(EXIT_FAILURE);
+      fail("could not mark stdout pipe as non blocking: %s", strerror(errno));
     }
   }
   struct pollfd pollfd;
@@ -26,8 +25,7 @@ static void with_write(const Options& options, char* buf) {
         continue;
       }
       if (ret < 0) {
-        fprintf(stderr, "read failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
+        fail("read failed: %s", strerror(errno));
       }
       cursor += ret;
       remaining -= ret;
@@ -58,8 +56,7 @@ static void with_vmsplice(const Options& options, char* buf) {
         continue;
       }
       if (ret < 0) {
-        fprintf(stderr, "vmsplice failed: %s", strerror(errno));
-        exit(EXIT_FAILURE);
+        fail("vmsplice failed: %s", strerror(errno));
       }
       bufvec.iov_base = (void*) (((char*) bufvec.iov_base) + ret);
       bufvec.iov_len -= ret;
@@ -76,16 +73,15 @@ int main(int argc, char** argv) {
   int fcntl_res = fcntl(STDOUT_FILENO, F_SETPIPE_SZ, options.buf_size);
   if (fcntl_res < 0) {
     if (errno == EPERM) {
-      fprintf(stderr, "setting the pipe size failed with EPERM, %zu is probably above the pipe size limit\n", options.buf_size);
+      fail("setting the pipe size failed with EPERM, %zu is probably above the pipe size limit\n", options.buf_size);
 
     } else {
-      fprintf(stderr, "setting the pipe size failed, are you piping the output somewhere? error: %s\n", strerror(errno));
+      fail("setting the pipe size failed, are you piping the output somewhere? error: %s\n", strerror(errno));
+
     }
-    exit(EXIT_FAILURE);
   }
   if ((size_t) fcntl_res != options.buf_size) {
-    fprintf(stderr, "could not set the pipe size to 0x%zx, got 0x%dx instead\n", options.buf_size, fcntl_res);
-    exit(EXIT_FAILURE);
+    fail("could not set the pipe size to 0x%zx, got 0x%dx instead\n", options.buf_size, fcntl_res);
   }
 
   fprintf(stderr, "starting to write\n");
